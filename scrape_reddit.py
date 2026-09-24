@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Scrape Bay Area subreddit posts into a CSV using Reddit's public JSON endpoints.
+"""Scrape Bay Area subreddit posts into a CSV using Reddit's JSON endpoints.
+
+If REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET are set (a "script" app from
+https://www.reddit.com/prefs/apps), requests go through the official OAuth API at
+oauth.reddit.com. That is required from cloud/datacenter IPs, which Reddit blocks
+for anonymous requests.
 
 Usage:
     python3 scrape_reddit.py                          # defaults below
@@ -7,6 +12,7 @@ Usage:
     python3 scrape_reddit.py --query "rent OR housing OR mortgage" --limit 300
 """
 import argparse
+import base64
 import csv
 import json
 import os
@@ -34,8 +40,34 @@ FIELDS = [
 ]
 
 
+_token = None
+
+
+def oauth_token():
+    """App-only OAuth token (client_credentials), or None if no credentials are set."""
+    global _token
+    cid, secret = os.environ.get("REDDIT_CLIENT_ID"), os.environ.get("REDDIT_CLIENT_SECRET")
+    if not (cid and secret):
+        return None
+    if _token is None:
+        req = urllib.request.Request(
+            "https://www.reddit.com/api/v1/access_token",
+            data=b"grant_type=client_credentials",
+            headers={"User-Agent": USER_AGENT},
+        )
+        req.add_header("Authorization", "Basic " + base64.b64encode(f"{cid}:{secret}".encode()).decode())
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            _token = json.load(resp)["access_token"]
+    return _token
+
+
 def fetch_json(url, retries=4):
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    headers = {"User-Agent": USER_AGENT}
+    token = oauth_token()
+    if token:
+        url = url.replace("https://www.reddit.com", "https://oauth.reddit.com", 1)
+        headers["Authorization"] = f"bearer {token}"
+    req = urllib.request.Request(url, headers=headers)
     for attempt in range(retries):
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
